@@ -1,23 +1,25 @@
 package net.teamfruit.morphcmd;
 
+import mchorse.metamorph.api.MorphAPI;
+import mchorse.metamorph.api.MorphList;
+import mchorse.metamorph.api.MorphManager;
+import mchorse.metamorph.api.morphs.AbstractMorph;
 import net.minecraft.command.CommandBase;
 import net.minecraft.command.CommandException;
 import net.minecraft.command.ICommandSender;
-import net.minecraft.command.PlayerNotFoundException;
-import net.minecraft.entity.item.EntityArmorStand;
+import net.minecraft.command.WrongUsageException;
 import net.minecraft.entity.player.EntityPlayerMP;
-import net.minecraft.network.play.server.SPacketSpawnMob;
+import net.minecraft.nbt.JsonToNBT;
+import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.tileentity.CommandBlockBaseLogic;
+import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.text.TextComponentString;
-import net.minecraft.util.text.TextFormatting;
-import org.apache.commons.lang3.StringUtils;
-import scala.actors.threadpool.Arrays;
+import net.minecraft.util.text.TextComponentTranslation;
+import org.apache.commons.lang3.math.NumberUtils;
 
-import javax.annotation.Nullable;
-import java.util.Collections;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Map;
 
 public class MorphCmdCommand extends CommandBase {
     private final MorphCmd mod;
@@ -33,7 +35,7 @@ public class MorphCmdCommand extends CommandBase {
 
     @Override
     public String getUsage(ICommandSender iCommandSender) {
-        return "/morphx <player> <entity> [nbt]";
+        return "metamorph.commands.morph";
     }
 
     @Override
@@ -41,30 +43,78 @@ public class MorphCmdCommand extends CommandBase {
         return 3;
     }
 
-    @Override
+    public boolean checkPermission(MinecraftServer server, ICommandSender sender) {
+        return sender instanceof CommandBlockBaseLogic || super.checkPermission(server, sender);
+    }
+
     public void execute(MinecraftServer server, ICommandSender sender, String[] args) throws CommandException {
-        if (args.length == 0) {
-            sender.sendMessage(new TextComponentString("/crash <player>"));
-            return;
-        }
-        List<EntityPlayerMP> players = getPlayers(server, sender, args[0]);
-        if (players.size() == 0)
-            throw new PlayerNotFoundException("commands.generic.player.notFound", args[0]);
-        for (EntityPlayerMP player : players) {
-//            crash(player);
-//            sender.sendMessage(new TextComponentString(TextFormatting.DARK_GREEN + "[" + TextFormatting.DARK_GREEN + "★" + TextFormatting.DARK_GREEN + "] " + TextFormatting.GREEN + args[0] + "をクラッシュさせました"));
-//            server.getPlayerList().sendMessage(new TextComponentString(TextFormatting.DARK_PURPLE + "[★] " + TextFormatting.LIGHT_PURPLE + sender.getName() + "が" + TextFormatting.RED + args[0] + "をクラッシュさせました"));
+        if (args.length < 1) {
+            throw new WrongUsageException(this.getUsage(sender));
+        } else {
+            List<EntityPlayerMP> players = getPlayers(server, sender, args[0]);
+
+            if (args.length < 2) {
+                for (EntityPlayerMP player : players)
+                    MorphAPI.demorph(player);
+
+                sender.sendMessage(new TextComponentTranslation("metamorph.success.demorph", args[0]));
+            } else {
+                AbstractMorph morph = null;
+
+                if (args.length < 3 || NumberUtils.isDigits(args[2])) {
+                    int value = 0;
+                    if (args.length >= 3)
+                        value = NumberUtils.toInt(args[2], 0);
+
+                    Map<String, List<MorphList.MorphCell>> morphs = MorphManager.INSTANCE.getMorphs(sender.getEntityWorld()).morphs;
+                    List<MorphList.MorphCell> list = morphs.get(args[1]);
+                    if (list == null || list.isEmpty())
+                        list = morphs.get(new ResourceLocation(args[1]).toString());
+                    if (!(list == null || list.isEmpty())) {
+                        if (value < 0 || list.size() <= value)
+                            throw new WrongUsageException("エンティティIDが範囲外です");
+                        NBTTagCompound nbt = new NBTTagCompound();
+                        list.get(value).morph.toNBT(nbt);
+                        morph = MorphManager.INSTANCE.morphFromNBT(nbt);
+                    }
+                }
+
+                if (morph == null) {
+                    NBTTagCompound tag = null;
+
+                    if (args.length >= 3) {
+                        try {
+                            tag = JsonToNBT.getTagFromJson(mergeArgs(args, 2));
+                        } catch (Exception var8) {
+                            throw new CommandException("metamorph.error.morph.nbt", new Object[]{var8.getMessage()});
+                        }
+                    }
+
+                    if (tag == null) {
+                        tag = new NBTTagCompound();
+                    }
+
+                    morph = MorphManager.INSTANCE.morphFromNBT(tag);
+                }
+
+                for (EntityPlayerMP player : players)
+                    MorphAPI.morph(player, morph, true);
+
+                sender.sendMessage(new TextComponentTranslation("metamorph.success.morph", args[0], args[1]));
+            }
         }
     }
 
-    @Override public List<String> getTabCompletions(MinecraftServer server, ICommandSender sender, String[] args, @Nullable BlockPos targetPos) {
-        if (args.length == 1) {
-            String arg = args[0];
-            List<String> players = Arrays.asList(server.getOnlinePlayerNames());
-            if (arg.length() > 0)
-                players = players.stream().filter(e -> StringUtils.startsWithIgnoreCase(e, arg)).collect(Collectors.toList());
-            return players;
+    public List<String> getTabCompletions(MinecraftServer server, ICommandSender sender, String[] args, BlockPos pos) {
+        return args.length == 1 ? getListOfStringsMatchingLastWord(args, server.getOnlinePlayerNames()) : super.getTabCompletions(server, sender, args, pos);
+    }
+
+    public static String mergeArgs(String[] args, int i) {
+        String dataTag;
+        for (dataTag = ""; i < args.length; ++i) {
+            dataTag = dataTag + args[i] + (i == args.length - 1 ? "" : " ");
         }
-        return Collections.emptyList();
+
+        return dataTag;
     }
 }
